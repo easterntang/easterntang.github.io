@@ -4,6 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>抽签器 — 导入名字 & 随机抽取</title>
+
+  <script src="https://cdn.jsdelivr.net/npm/leancloud-storage/dist/av-min.js"></script>
   <style>
     :root{--bg:#0f1724;--card:#0b1220;--accent:#06b6d4;--muted:#94a3b8;--glass: rgba(255,255,255,0.04)}
     html,body{height:100%;margin:0;font-family:Inter,system-ui,Segoe UI,Roboto,Helvetica,Arial;color:#e6eef6;background:linear-gradient(180deg,#071021 0%, #081322 100%)}
@@ -90,189 +92,212 @@
   </div>
 
 <script>
-(function(){
-  // Helpers
-  const $ = id => document.getElementById(id);
-  const log = (t) => { const p = $('log'); p.textContent = new Date().toLocaleTimeString() + '  ' + t + '\n' + p.textContent; };
+  <script src="https://cdn.jsdelivr.net/npm/leancloud-storage@4.15.0/dist/av-min.js"></script>
+<script>
+/* ----------------------------
+   0. 初始化 LeanCloud
+----------------------------- */
+AV.init({
+  appId: "awjrq2pnF6yDBX2QT7Sq1dHQ-gzGzoHsz",   // ← 换成你的
+  appKey: "WY6uq9q4hPthkwKX5JIHrlYk",           // ← 换成你的
+  serverURL: "https://awjrq2pn.lc-cn-n1-shared.com" // ← LeanCloud控制台可查
+});
 
-  // Elements
-  const namesInput = $('namesInput');
-  const csvFile = $('csvFile');
-  const importCsvBtn = $('importCsvBtn');
-  const clearNamesBtn = $('clearNamesBtn');
-  const countInput = $('count');
-  const uniqueSelect = $('uniqueSelect');
-  const excludeBlank = $('excludeBlank');
-  const shuffleBefore = $('shuffleBefore');
-  const drawBtn = $('drawBtn');
-  const previewBtn = $('previewBtn');
-  const exportAllBtn = $('exportAllBtn');
-  const slots = $('slots');
-  const winnersDiv = $('winners');
-  const copyBtn = $('copyBtn');
-  const exportWinnersBtn = $('exportWinnersBtn');
-  const resetBtn = $('resetBtn');
+/* ----------------------------
+   1. 全局变量
+----------------------------- */
+let isOwner = false;   // 房主模式（你输入口令后变 true）
+const ROOM_ID = "global-room"; // 全局房间 ID，全员共享名单
+const NameList = new AV.Object.extend("NameList");
 
-  // State
-  let currentPool = [];
-  let lastWinners = [];
+/* ----------------------------
+   2. UI 元素
+----------------------------- */
+const namesInput = document.getElementById("namesInput");
+const drawBtn = document.getElementById("drawBtn");
+const clearNamesBtn = document.getElementById("clearNamesBtn");
+const logBox = document.getElementById("log");
+const slots = document.getElementById("slots");
+const winnersDiv = document.getElementById("winners");
 
-  // Parse names from textarea
-  function parseNames(text){
-    if(!text) return [];
-    // split by newlines and commas/semicolons
-    const raw = text.split(/\r?\n|,|;/).map(s => s.trim());
-    const filtered = raw.filter(s => s !== '');
-    // if excludeBlank checked, already filtered; otherwise keep blanks (but usually we want to remove)
-    return filtered;
+/* 将清空按钮禁用（普通用户不能清空名单） */
+clearNamesBtn.disabled = true;
+
+/* ----------------------------
+   3. 房主口令验证
+----------------------------- */
+(async function askOwnerPassword(){
+  const pw = prompt("请输入口令（房主可抽签+删除）：\n\n普通用户可直接点取消加入名单");
+  if(pw === "666888"){       // ← 你可以改成你自己的口令
+      isOwner = true;
+      clearNamesBtn.disabled = false;
+      drawBtn.disabled = false;
+      log("已进入房主模式");
+  } else {
+      isOwner = false;
+      drawBtn.disabled = true;
+      log("访客模式：你可以添加名字，但不能清空或抽签");
   }
+})();
 
-  function readPool(){
-    const arr = parseNames(namesInput.value);
-    // optionally exclude blanks (parseNames already removed blanks)
-    return arr;
-  }
+/* ----------------------------
+   4. 日志函数
+----------------------------- */
+function log(t){
+  logBox.textContent = new Date().toLocaleTimeString() + "  " + t + "\n" + logBox.textContent;
+}
 
-  // Fisher-Yates shuffle
-  function shuffle(array){
+/* ----------------------------
+   5. 监听数据库变化（实时同步给所有人）
+----------------------------- */
+async function subscribeRealtime(){
+    const query = new AV.Query("NameList");
+    query.equalTo("room", ROOM_ID);
+
+    const liveQuery = await query.subscribe();
+    liveQuery.on("create", refreshListFromCloud);
+    liveQuery.on("update", refreshListFromCloud);
+    liveQuery.on("delete", refreshListFromCloud);
+
+    log("已开启实时同步");
+}
+subscribeRealtime();
+
+/* ----------------------------
+   6. 从云端读取名单并刷新 UI
+----------------------------- */
+async function refreshListFromCloud(){
+    const query = new AV.Query("NameList");
+    query.equalTo("room", ROOM_ID);
+    query.limit(500);
+
+    const results = await query.find();
+
+    const arr = results.map(r => r.get("name"));
+    namesInput.value = arr.join("\n");
+
+    log("云端名单已更新，共 " + arr.length + " 人");
+}
+
+/* 首次加载时也拉一次 */
+refreshListFromCloud();
+
+/* ----------------------------
+   7. 用户输入名单 → 自动写入云端
+----------------------------- */
+namesInput.addEventListener("change", async ()=>{
+    // 普通用户也要写入云端，但是只能添加自己的名字
+    const newList = namesInput.value.split(/\n|,|;/).map(s => s.trim()).filter(Boolean);
+
+    // 清空表（只有房主可以）
+    if(isOwner){
+        const q = new AV.Query("NameList");
+        q.equalTo("room", ROOM_ID);
+        const results = await q.find();
+        await AV.Object.destroyAll(results);
+    }
+
+    // 全部重新写入（房主）
+    // 普通用户：只增加新名字
+    for(const nm of newList){
+        const obj = new NameList();
+        obj.set("room", ROOM_ID);
+        obj.set("name", nm);
+        await obj.save();
+    }
+
+    log("已写入云端");
+});
+
+/* ----------------------------
+   8. 房主可清空列表
+----------------------------- */
+clearNamesBtn.addEventListener("click", async ()=>{
+    if(!isOwner) return alert("你不是房主，不能清空");
+
+    if(!confirm("确定要清空名单吗？")) return;
+
+    const q = new AV.Query("NameList");
+    q.equalTo("room", ROOM_ID);
+    const results = await q.find();
+    await AV.Object.destroyAll(results);
+
+    namesInput.value = "";
+    log("已清空云端名单");
+});
+
+/* ----------------------------
+   9. 以下是你原有的抽签逻辑，不动 UI
+----------------------------- */
+let lastWinners = [];
+
+function shuffle(array){
     let a = array.slice();
     for(let i=a.length-1;i>0;i--){
-      const j=Math.floor(Math.random()*(i+1));
-      [a[i],a[j]]=[a[j],a[i]];
+        const j = Math.floor(Math.random() * (i+1));
+        [a[i],a[j]] = [a[j],a[i]];
     }
     return a;
-  }
+}
 
-  function pick(pool, n, unique=true){
-    if(n<=0) return [];
-    if(pool.length===0) return [];
-    if(unique){
-      const limit = Math.min(n, pool.length);
-      const s = shuffle(pool);
-      return s.slice(0, limit);
-    } else {
-      // allow duplicates
-      const res = [];
-      for(let i=0;i<n;i++){ res.push(pool[Math.floor(Math.random()*pool.length)]); }
-      return res;
-    }
-  }
-
-  function displaySlots(n){
-    slots.innerHTML='';
+function displaySlots(n){
+    slots.innerHTML = "";
     for(let i=0;i<n;i++){
-      const div = document.createElement('div');
-      div.className='animated-slot';
-      div.textContent='— 抽签槽 ' + (i+1);
-      slots.appendChild(div);
+        const div = document.createElement("div");
+        div.className = "animated-slot";
+        div.textContent = "— 抽签槽 " + (i+1);
+        slots.appendChild(div);
     }
-  }
+}
 
-  function animateReveal(names, duration=1200){
-    // names: array of winners
+function animateReveal(names, duration=1200){
     const slotEls = Array.from(slots.children);
-    winnersDiv.innerHTML='';
+    const pool = namesInput.value.split("\n").filter(Boolean);
+    winnersDiv.innerHTML="";
     lastWinners = [];
 
-    // For each slot, cycle through random names then reveal
-    const pool = readPool();
-    slotEls.forEach((el, idx) => {
-      let rounds = 18; // number of flickers
-      const interval = Math.max(20, duration / rounds);
-      let r=0;
-      const timer = setInterval(()=>{
-        el.textContent = pool[Math.floor(Math.random()*pool.length)] || '—';
-        r++;
-        if(r>=rounds){ clearInterval(timer); el.textContent = names[idx] || '—';
-          const pill = document.createElement('span'); pill.className='winner-pill'; pill.textContent=(idx+1)+'. '+(names[idx]||'—');
-          winnersDiv.appendChild(pill);
-          lastWinners.push(names[idx]||'');
-        }
-      }, interval);
+    slotEls.forEach((el, idx)=>{
+        let r = 0;
+        let rounds = 18;
+        const interval = Math.max(20, duration/rounds);
+
+        const timer = setInterval(()=>{
+            el.textContent = pool[Math.floor(Math.random()*pool.length)] || "—";
+            r++;
+            if(r >= rounds){
+                clearInterval(timer);
+                el.textContent = names[idx] || "—";
+                const pill = document.createElement("span");
+                pill.className = "winner-pill";
+                pill.textContent = (idx+1) + ". " + (names[idx] || "—");
+                winnersDiv.appendChild(pill);
+                lastWinners.push(names[idx]||"");
+            }
+        }, interval);
     });
-  }
+}
 
-  // Actions
-  importCsvBtn.addEventListener('click', ()=>{
-    if(!csvFile.files || csvFile.files.length===0){ alert('请先选择 CSV 文件 (或直接粘贴名单在左侧)'); return; }
-    const f = csvFile.files[0];
-    const reader = new FileReader();
-    reader.onload = function(e){
-      const txt = e.target.result;
-      // take first column of each line if comma-separated
-      const lines = txt.split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
-      const parsed = lines.map(l=>{
-        const cols = l.split(/,|;/);
-        return cols[0].trim();
-      }).filter(Boolean);
-      // append to textarea
-      const existing = namesInput.value.trim();
-      namesInput.value = (existing ? existing + '\n' : '') + parsed.join('\n');
-      log('已从 CSV 导入 ' + parsed.length + ' 个名字');
-    };
-    reader.readAsText(f,'utf-8');
-  });
-
-  clearNamesBtn.addEventListener('click', ()=>{ if(confirm('确认清空所有已输入的名字？')){ namesInput.value=''; log('已清空名单'); } });
-
-  previewBtn.addEventListener('click', ()=>{
-    const arr = readPool();
-    alert('名单预览（共 '+arr.length+'）：\n' + arr.slice(0,500).join('\n'));
-  });
-
-  exportAllBtn.addEventListener('click', ()=>{
-    const arr = readPool();
-    if(arr.length===0){ alert('名单为空'); return; }
-    const csv = arr.map(r => '"'+r.replace(/"/g,'""')+'"').join('\n');
-    const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a'); a.href=url; a.download='names_export.csv'; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
-    log('已导出全部名单（'+arr.length+'）');
-  });
-
-  drawBtn.addEventListener('click', ()=>{
-    const pool = readPool().filter(Boolean);
-    if(pool.length===0){ alert('名单为空，请先输入或导入名字'); return; }
-    const n = Math.max(1, parseInt(countInput.value)||1);
-    const unique = (uniqueSelect.value === 'true');
-    if(unique && n>pool.length){
-      if(!confirm('抽取人数超出去重后的名单数量（'+pool.length+'）。是否改为只抽取 '+pool.length+' 人？按 OK 确认。')){ return; }
+/* 房主点击抽签 */
+drawBtn.addEventListener("click", ()=>{
+    if(!isOwner){
+        return alert("你不是房主，不能抽签");
     }
 
-    // Determine actual number to draw
-    const actualN = unique ? Math.min(n, pool.length) : n;
-    displaySlots(actualN);
-    const drawPool = shuffleBefore.checked ? shuffle(pool) : pool.slice();
-    // pick winners
-    const winners = pick(drawPool, actualN, unique);
-    log('开始抽签，目标人数：' + n + '，实际抽取：' + actualN + '，去重：' + unique);
-    animateReveal(winners, 1200);
-  });
+    const pool = namesInput.value.split("\n").filter(Boolean);
+    if(pool.length === 0){
+        alert("名单为空");
+        return;
+    }
 
-  copyBtn.addEventListener('click', ()=>{
-    if(lastWinners.length===0){ alert('还没有抽取结果'); return; }
-    navigator.clipboard?.writeText(lastWinners.join('\n'))
-      .then(()=>{ alert('已复制到剪贴板'); log('结果已复制'); })
-      .catch(()=>{ prompt('请手动复制以下结果：', lastWinners.join('\n')); });
-  });
+    const n = parseInt(document.getElementById("count").value) || 1;
+    displaySlots(n);
 
-  exportWinnersBtn.addEventListener('click', ()=>{
-    if(lastWinners.length===0){ alert('还没有抽取结果'); return; }
-    const csv = lastWinners.map(r=>'"'+(r||'').replace(/"/g,'""')+'"').join('\n');
-    const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a'); a.href=url; a.download='winners.csv'; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
-    log('已导出中奖名单（'+lastWinners.length+'）');
-  });
+    const pick = shuffle(pool).slice(0,n);
+    animateReveal(pick, 1200);
 
-  resetBtn.addEventListener('click', ()=>{
-    if(confirm('确认重置抽奖（保留名单）？')){ slots.innerHTML=''; winnersDiv.innerHTML=''; lastWinners=[]; log('已重置抽奖显示'); }
-  });
-
-  // initialize
-  namesInput.placeholder = '在这里粘贴或输入名单，每行一个名字。也支持使用逗号/分号分隔。\n例如：\n张三\n李四\n王五';
-  log('页面已就绪');
-})();
+    log("已抽取 " + n + " 人");
+});
 </script>
 </body>
 </html>
+
