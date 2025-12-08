@@ -1,0 +1,230 @@
+<!-- LeanCloud JS SDK -->
+  <script src="https://cdn.jsdelivr.net/npm/leancloud-storage@4.15.0/dist/av-min.js"></script>
+
+  <style>
+    :root{--bg:#0f1724;--card:#0b1220;--accent:#06b6d4;--muted:#94a3b8;--glass: rgba(255,255,255,0.04)}
+    html,body{height:100%;margin:0;font-family:Inter,system-ui,Segoe UI,Roboto,Helvetica,Arial;color:#e6eef6;background:linear-gradient(180deg,#071021 0%, #081322 100%)}
+    .container{max-width:980px;margin:32px auto;padding:24px;background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));border-radius:12px;box-shadow:0 8px 30px rgba(2,6,23,0.6)}
+    h1{margin:0 0 12px;font-size:20px;color:var(--accent)}
+    .grid{display:grid;grid-template-columns:1fr 360px;gap:18px}
+    .card{background:var(--card);padding:14px;border-radius:10px;border:1px solid rgba(255,255,255,0.02)}
+    label{font-size:13px;color:var(--muted);display:block;margin-bottom:6px}
+    textarea{width:100%;height:230px;padding:10px;border-radius:8px;border:1px solid rgba(255,255,255,0.04);background:var(--glass);color:inherit;resize:vertical}
+    input[type=text], input[type=number]{width:100%;padding:8px;border-radius:8px;border:1px solid rgba(255,255,255,0.04);background:transparent;color:inherit}
+    .btn{display:inline-block;padding:8px 12px;border-radius:8px;background:var(--accent);color:#042022;text-decoration:none;border:none;cursor:pointer;font-weight:600}
+    .mutebtn{background:transparent;border:1px solid rgba(255,255,255,0.04);color:var(--muted)}
+    .winners-list{margin-top:12px}
+    .winner-pill{display:inline-block;padding:6px 10px;border-radius:999px;background:linear-gradient(90deg, rgba(6,182,212,0.12), rgba(6,182,212,0.06));margin:6px 6px 0 0;border:1px solid rgba(6,182,212,0.12)}
+    .animated-slot{height:56px;display:flex;align-items:center;justify-content:center;margin-bottom:6px;border-radius:8px;background:rgba(255,255,255,0.02);font-size:18px}
+    .small{font-size:12px;color:var(--muted)}
+  </style>
+</head>
+
+<body>
+  <div class="container">
+    <h1>多人协作抽签系统</h1>
+    <p class="small">支持多人实时在线提交名字，房主可抽签/清空。</p>
+
+    <div class="grid">
+
+      <!-- 左侧部分 -->
+      <div class="card">
+        <label>1) 当前名单（实时同步）</label>
+        <textarea id="namesInput" placeholder="正在载入..." disabled></textarea>
+
+        <div style="margin-top:10px; display:flex; gap:8px;">
+          <button class="btn" id="addMyNameBtn">提交我的名字</button>
+          <button class="mutebtn" id="clearNamesBtn" disabled>清空名单（房主）</button>
+        </div>
+
+        <hr style="margin:12px 0;border:none;border-top:1px solid rgba(255,255,255,0.04)" />
+
+        <label>2) 抽签设置（房主可用）</label>
+
+        <label class="small">抽取人数</label>
+        <input id="count" type="number" value="1" min="1" />
+
+        <button class="btn" id="drawBtn" disabled style="margin-top:10px;">开始抽签（房主）</button>
+      </div>
+
+      <!-- 右侧部分 -->
+      <div class="card">
+        <label>抽签结果</label>
+        <div id="slots"></div>
+        <div id="winners" class="winners-list"></div>
+
+        <label class="small">系统日志</label>
+        <pre id="log" style="max-height:200px;overflow:auto;background:rgba(0,0,0,0.2);padding:10px;border-radius:8px;"></pre>
+      </div>
+
+    </div>
+
+    <!-- 主脚本 -->
+    <script>
+    /************** 初始化 LeanCloud **************/
+    AV.init({
+      appId: "awjrq2pnF6yDBX2QT7Sq1dHQ-gzGzoHsz",
+      appKey: "WY6uq9q4hPthkwKX5JIHrlYk",
+      serverURL: "https://awjrq2pn.lc-cn-n1-shared.com"
+    });
+
+    const ROOM_ID = "global-room";
+    const NameList = AV.Object.extend("NameList");
+
+    let isOwner = false;
+
+    const namesInput = document.getElementById("namesInput");
+    const addMyNameBtn = document.getElementById("addMyNameBtn");
+    const clearNamesBtn = document.getElementById("clearNamesBtn");
+    const drawBtn = document.getElementById("drawBtn");
+    const countInput = document.getElementById("count");
+    const slots = document.getElementById("slots");
+    const winnersDiv = document.getElementById("winners");
+    const logBox = document.getElementById("log");
+
+    function log(t){
+      const s = new Date().toLocaleTimeString() + "  " + t + "\n";
+      logBox.textContent = s + logBox.textContent;
+    }
+
+    /************** 房主验证 **************/
+    (function(){
+      const pw = prompt("请输入房主口令（访客点取消即可使用）");
+      if(pw === "666888"){
+        isOwner = true;
+        drawBtn.disabled = false;
+        clearNamesBtn.disabled = false;
+        log("你已进入房主模式");
+      } else {
+        isOwner = false;
+        log("访客模式：可以添加名字但不能抽签/清空");
+      }
+    })();
+
+
+    /************** 加载名单 **************/
+    async function loadNames(){
+      const query = new AV.Query("NameList");
+      query.equalTo("room", ROOM_ID);
+      query.ascending("createdAt");
+      const res = await query.find();
+
+      const list = res.map(i => i.get("name"));
+      namesInput.value = list.join("\n");
+      log("名单已同步，共 " + list.length + " 个名字");
+    }
+    loadNames();
+
+
+    /************** 实时同步 **************/
+    async function enableRealtime(){
+      const query = new AV.Query("NameList");
+      query.equalTo("room", ROOM_ID);
+      const live = await query.subscribe();
+      live.on("create", loadNames);
+      live.on("delete", loadNames);
+      log("已开启实时同步");
+    }
+    enableRealtime();
+
+
+    /************** 添加名字 **************/
+    addMyNameBtn.addEventListener("click", async ()=>{
+      const name = prompt("请输入你的名字：");
+      if(!name) return;
+
+      const obj = new NameList();
+      obj.set("room", ROOM_ID);
+      obj.set("name", name.trim());
+      await obj.save();
+
+      log("你添加了名字：" + name);
+    });
+
+
+    /************** 房主清空 **************/
+    clearNamesBtn.addEventListener("click", async ()=>{
+      if(!isOwner) return;
+
+      if(!confirm("确定清空所有名字？")) return;
+
+      const query = new AV.Query("NameList");
+      query.equalTo("room", ROOM_ID);
+      const res = await query.find();
+      await AV.Object.destroyAll(res);
+
+      namesInput.value = "";
+      log("房主已清空名单");
+    });
+
+
+    /************** 抽签动画 **************/
+    function displaySlots(n){
+      slots.innerHTML = "";
+      for(let i=0;i<n;i++){
+        const div = document.createElement("div");
+        div.className = "animated-slot";
+        div.textContent = "— 抽签槽 " + (i+1);
+        slots.appendChild(div);
+      }
+    }
+
+    function shuffle(arr){
+      let a = arr.slice();
+      for(let i=a.length-1;i>0;i--){
+        const j = Math.floor(Math.random()*(i+1));
+        [a[i],a[j]]=[a[j],a[i]];
+      }
+      return a;
+    }
+
+    function animateReveal(names){
+      const pool = namesInput.value.split("\n").filter(Boolean);
+      const slotEls = Array.from(slots.children);
+
+      winnersDiv.innerHTML = "";
+
+      slotEls.forEach((el, idx)=>{
+        let rounds = 20, r = 0;
+        const timer = setInterval(()=>{
+          el.textContent = pool[Math.floor(Math.random()*pool.length)] || "—";
+          if(++r >= rounds){
+            clearInterval(timer);
+            el.textContent = names[idx];
+
+            const pill = document.createElement("span");
+            pill.className = "winner-pill";
+            pill.textContent = (idx+1)+". "+names[idx];
+            winnersDiv.appendChild(pill);
+          }
+        }, 40);
+      });
+    }
+
+
+    /************** 房主抽签 **************/
+    drawBtn.addEventListener("click", ()=>{
+      if(!isOwner){
+        alert("只有房主可以抽签");
+        return;
+      }
+
+      const pool = namesInput.value.split("\n").filter(Boolean);
+      if(pool.length === 0){
+        alert("名单为空");
+        return;
+      }
+
+      const n = Math.max(1, parseInt(countInput.value));
+      displaySlots(n);
+
+      const winners = shuffle(pool).slice(0, n);
+      animateReveal(winners);
+
+      log("房主抽取了 " + n + " 人");
+    });
+
+    </script>
+  </div>
+</body>
+</html>
