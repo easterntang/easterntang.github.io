@@ -769,4 +769,3 @@ window.onload = async function() {
     await updateSystemStatusDisplay();
 };
 
-
