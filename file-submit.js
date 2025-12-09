@@ -11,6 +11,50 @@ const ROOM_ID = "file_submit_system_room_001";
 const DEFAULT_OWNER_PASSWORD = "admin123";
 // ================================== 配置结束 ==================================
 
+// ==================== 全局变量 & 前置函数（解决 JSZip 加载问题）====================
+// 检测并兜底加载 JSZip/FileSaver
+async function loadRequiredLibraries() {
+    return new Promise((resolve, reject) => {
+        let loadedCount = 0;
+        const totalLibs = 2;
+
+        // 加载 JSZip
+        if (typeof JSZip === 'undefined') {
+            const jszipScript = document.createElement('script');
+            jszipScript.src = 'https://unpkg.com/jszip@3.10.1/dist/jszip.min.js';
+            jszipScript.onload = () => {
+                loadedCount++;
+                if (loadedCount === totalLibs) resolve();
+            };
+            jszipScript.onerror = () => reject(new Error('JSZip 加载失败'));
+            document.head.appendChild(jszipScript);
+        } else {
+            loadedCount++;
+        }
+
+        // 加载 FileSaver
+        if (typeof saveAs === 'undefined') {
+            const fileSaverScript = document.createElement('script');
+            fileSaverScript.src = 'https://unpkg.com/file-saver@2.0.5/dist/FileSaver.min.js';
+            fileSaverScript.onload = () => {
+                loadedCount++;
+                if (loadedCount === totalLibs) resolve();
+            };
+            fileSaverScript.onerror = () => reject(new Error('FileSaver 加载失败'));
+            document.head.appendChild(fileSaverScript);
+        } else {
+            loadedCount++;
+        }
+
+        // 超时兜底
+        setTimeout(() => {
+            if (loadedCount < totalLibs) {
+                reject(new Error('库加载超时，请检查网络'));
+            }
+        }, 5000);
+    });
+}
+
 // ==================== LeanCloud 数据模型定义 ====================
 const Submitter = AV.Object.extend('Submitter');
 const SystemStatus = AV.Object.extend('SystemStatus');
@@ -518,7 +562,7 @@ async function verifyVisitorName() {
                 objectId: submitter.id
             }));
             showElement('visitor-submit');
-            document.getElementById('visitor-name-display').textContent = `当前用户：${inputName}`;
+            document.getElementById('visitor-name-display').textContent = inputName;
             
             // 检查是否已有提交
             if (submitter.get('submitted') && submitter.get('fileUrl')) {
@@ -632,12 +676,11 @@ async function submitFile() {
                 if (!statusElement) {
                     statusElement = document.createElement('div');
                     statusElement.id = 'submit-status';
-                    statusElement.className = 'mt-4 text-center text-success font-medium hidden';
+                    statusElement.className = 'mt-4 text-center text-success font-medium';
                     // 插入到提交按钮上方
                     document.getElementById('submit-file-btn').parentNode.before(statusElement);
                 }
-                statusElement.className = 'mt-4 text-center text-success font-medium';
-                statusElement.textContent = '提交成功！';
+                statusElement.textContent = '提交成功！3秒后返回验证页';
                 statusElement.classList.remove('hidden');
 
                 // 3秒后重置
@@ -689,8 +732,20 @@ function resetSystem() {
     }
 }
 
-// ==================== 导出文件 ====================
+// ==================== 导出文件（核心修复：增加 JSZip 加载检测 + 兜底） ====================
 async function exportAllSubmittedFiles() {
+    // 第一步：检测 JSZip/FileSaver 是否加载成功
+    if (typeof JSZip === 'undefined' || typeof saveAs === 'undefined') {
+        alert('导出功能依赖的组件加载失败！正在尝试手动加载...');
+        // 手动加载库（兜底方案）
+        try {
+            await loadRequiredLibraries();
+        } catch (error) {
+            alert('手动加载组件失败：' + error.message);
+            return;
+        }
+    }
+
     try {
         // 查询已提交的文件
         const query = new AV.Query('Submitter');
@@ -706,9 +761,10 @@ async function exportAllSubmittedFiles() {
 
         const zip = new JSZip();
         let processedCount = 0;
+        const totalFiles = submittedFiles.length;
 
         // 处理每个文件
-        submittedFiles.forEach(async (item) => {
+        for (const item of submittedFiles) {
             try {
                 const fileUrl = item.get('fileUrl');
                 const fileName = item.get('fileName');
@@ -721,19 +777,17 @@ async function exportAllSubmittedFiles() {
                 zip.file(zipFileName, blob);
                 
                 processedCount++;
-                if (processedCount === submittedFiles.length) {
-                    await generateAndDownloadZip(zip, submittedFiles.length);
-                }
             } catch (error) {
                 console.error(`处理 ${item.get('name')} 的文件失败：`, error);
                 alert(`处理 ${item.get('name')} 的文件时出错，将跳过该文件`);
                 processedCount++;
-                
-                if (processedCount === submittedFiles.length) {
-                    await generateAndDownloadZip(zip, zip.files.length);
-                }
             }
-        });
+
+            // 所有文件处理完成后生成ZIP
+            if (processedCount === totalFiles) {
+                await generateAndDownloadZip(zip, zip.files.length);
+            }
+        }
     } catch (error) {
         alert('获取提交文件失败：' + error.message);
     }
@@ -820,5 +874,11 @@ document.addEventListener('DOMContentLoaded', function() {
 
 // ==================== 页面初始化 ====================
 window.onload = async function() {
+    // 初始化时预加载导出库
+    try {
+        await loadRequiredLibraries();
+    } catch (error) {
+        console.warn('预加载导出库失败（不影响基础功能）：', error.message);
+    }
     await updateSystemStatusDisplay();
 };
