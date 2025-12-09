@@ -10,6 +10,9 @@
     <link href="https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.min.css" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/leancloud-storage@4.15.0/dist/av-min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+    <!-- 新增：导出ZIP必需的JSZip和FileSaver CDN（解决导出报错） -->
+    <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/file-saver@2.0.5/dist/FileSaver.min.js"></script>
     <!-- 自定义CSS -->
     <link rel="stylesheet" href="file-submit.css">
     <!-- Tailwind 配置 -->
@@ -300,7 +303,7 @@
 
                 <!-- 提交按钮：移动端全屏宽度 -->
                 <div class="flex flex-col sm:flex-row gap-3 justify-center">
-                    <button id="submit-file-btn" onclick="submitFile()" class="px-6 py-3 bg-primary text-white rounded-lg hover:bg-primary/90 transition-all text-base font-medium flex-1">
+                    <button id="submit-file-btn" onclick="submitFile()" class="px-6 py-3 bg-primary text-white rounded-lg hover:bg-primary/90 transition-all text-base font-medium flex-1" disabled>
                         提交文件
                     </button>
                     <button onclick="backToRoleSelection()" class="px-5 py-3 border border-gray-300 rounded-lg hover:bg-gray-50 transition-all">
