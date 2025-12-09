@@ -47,9 +47,15 @@ function backToRoleSelection() {
 
 function backToVisitorVerify() {
     showElement('visitor-verify');
-    document.getElementById('file-upload').value = '';
-    document.getElementById('file-preview').classList.add('hidden');
-    document.getElementById('submit-file-btn').disabled = true;
+    if (document.getElementById('file-upload')) {
+        document.getElementById('file-upload').value = '';
+    }
+    if (document.getElementById('file-preview')) {
+        document.getElementById('file-preview').classList.add('hidden');
+    }
+    if (document.getElementById('submit-file-btn')) {
+        document.getElementById('submit-file-btn').disabled = true;
+    }
 }
 
 // ==================== 系统状态管理（LeanCloud 版） ====================
@@ -527,7 +533,7 @@ async function verifyVisitorName() {
     }
 }
 
-// 处理文件选择
+// 处理文件选择（修改：文件大小限制改为10MB + 传递文件大小）
 async function handleFileSelect() {
     // 检查系统状态
     const systemStatus = await getSystemStatus();
@@ -540,46 +546,52 @@ async function handleFileSelect() {
     const file = fileInput.files[0];
     if (!file) return;
 
-    // 限制文件大小（5MB）
-    const maxSize = 5 * 1024 * 1024;
+    // 限制文件大小（修改：从5MB改为10MB）
+    const maxSize = 10 * 1024 * 1024;
     if (file.size > maxSize) {
-        alert('文件大小超过5MB限制，请选择更小的文件！');
+        alert('文件大小超过10MB限制，请选择更小的文件！');
         fileInput.value = '';
         return;
     }
 
+    // 计算文件大小（友好显示）
+    const fileSizeStr = (file.size / 1024).toFixed(2) + 'KB';
+    
     const reader = new FileReader();
     reader.onload = function(e) {
         const fileUrl = e.target.result;
-        displayFilePreview(fileUrl, file.name, file.type);
+        // 传递文件大小到预览
+        displayFilePreview(fileUrl, file.name, file.type, fileSizeStr);
         document.getElementById('submit-file-btn').disabled = false;
     };
     reader.readAsDataURL(file);
 }
 
-// 显示文件预览
-function displayFilePreview(fileUrl, fileName, fileType) {
+// 显示文件预览（修复：匹配HTML实际元素ID + 支持文件大小显示）
+function displayFilePreview(fileUrl, fileName, fileType, fileSizeStr) {
     const previewContainer = document.getElementById('file-preview');
-    const previewContent = document.getElementById('preview-content');
+    const imagePreview = document.getElementById('image-preview');
+    const fileInfo = document.getElementById('file-info');
+    const fileNameEl = document.getElementById('file-name');
+    const fileSizeEl = document.getElementById('file-size');
+    
     previewContainer.classList.remove('hidden');
+    imagePreview.classList.add('hidden'); // 先隐藏图片预览
+    fileInfo.classList.remove('hidden'); // 显示文件信息
 
     if (fileType.startsWith('image/')) {
-        previewContent.innerHTML = `
-            <img src="${fileUrl}" alt="${fileName}" class="max-w-full max-h-[300px] mx-auto">
-            <p class="mt-2 text-center text-gray-700">${fileName}</p>
-        `;
+        imagePreview.src = fileUrl;
+        imagePreview.alt = fileName;
+        imagePreview.classList.remove('hidden'); // 显示图片预览
+        fileNameEl.textContent = fileName;
+        fileSizeEl.textContent = fileSizeStr ? `大小：${fileSizeStr}` : '';
     } else {
-        previewContent.innerHTML = `
-            <div class="text-center">
-                <i class="fa fa-file-text-o text-5xl text-gray-400 mb-2"></i>
-                <p class="text-gray-700">${fileName}</p>
-                <p class="text-sm text-gray-500">无法预览该文件类型，将直接提交</p>
-            </div>
-        `;
+        fileNameEl.textContent = fileName;
+        fileSizeEl.textContent = `${fileSizeStr ? '大小：' + fileSizeStr + ' | ' : ''}类型：${fileType} | 无法预览，将直接提交`;
     }
 }
 
-// 提交文件
+// 提交文件（修复：兼容submit-status元素不存在的问题）
 async function submitFile() {
     // 检查系统状态
     const systemStatus = await getSystemStatus();
@@ -614,8 +626,16 @@ async function submitFile() {
                 
                 await submitter.save();
 
-                // 显示提交成功提示
-                const statusElement = document.getElementById('submit-status');
+                // 显示提交成功提示（修复：兼容submit-status元素不存在）
+                let statusElement = document.getElementById('submit-status');
+                // 如果元素不存在，动态创建
+                if (!statusElement) {
+                    statusElement = document.createElement('div');
+                    statusElement.id = 'submit-status';
+                    statusElement.className = 'mt-4 text-center text-success font-medium hidden';
+                    // 插入到提交按钮上方
+                    document.getElementById('submit-file-btn').parentNode.before(statusElement);
+                }
                 statusElement.className = 'mt-4 text-center text-success font-medium';
                 statusElement.textContent = '提交成功！';
                 statusElement.classList.remove('hidden');
@@ -767,30 +787,34 @@ function generateAndDownloadZip(zip, successCount) {
     });
 }
 
-// ==================== 拖拽上传处理 ====================
-const uploadArea = document.getElementById('upload-area');
-uploadArea.addEventListener('dragover', (e) => {
-    e.preventDefault();
-    uploadArea.classList.add('border-primary');
-});
-uploadArea.addEventListener('dragleave', () => {
-    uploadArea.classList.remove('border-primary');
-});
-uploadArea.addEventListener('drop', async (e) => {
-    e.preventDefault();
-    uploadArea.classList.remove('border-primary');
-    
-    // 检查系统状态
-    const systemStatus = await getSystemStatus();
-    if (systemStatus !== 'running') {
-        alert(`系统当前${systemStatus === 'not_started' ? '未开始' : systemStatus === 'paused' ? '已暂停' : '已结束'}，暂不允许上传文件`);
-        return;
-    }
+// ==================== 拖拽上传处理（增加空值判断）====================
+document.addEventListener('DOMContentLoaded', function() {
+    const uploadArea = document.getElementById('upload-area');
+    if (uploadArea) {
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.classList.add('border-primary');
+        });
+        uploadArea.addEventListener('dragleave', () => {
+            uploadArea.classList.remove('border-primary');
+        });
+        uploadArea.addEventListener('drop', async (e) => {
+            e.preventDefault();
+            uploadArea.classList.remove('border-primary');
+            
+            // 检查系统状态
+            const systemStatus = await getSystemStatus();
+            if (systemStatus !== 'running') {
+                alert(`系统当前${systemStatus === 'not_started' ? '未开始' : systemStatus === 'paused' ? '已暂停' : '已结束'}，暂不允许上传文件`);
+                return;
+            }
 
-    const files = e.dataTransfer.files;
-    if (files.length > 0) {
-        document.getElementById('file-upload').files = files;
-        handleFileSelect();
+            const files = e.dataTransfer.files;
+            if (files.length > 0) {
+                document.getElementById('file-upload').files = files;
+                handleFileSelect();
+            }
+        });
     }
 });
 
