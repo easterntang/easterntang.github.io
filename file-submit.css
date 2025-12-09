@@ -1,13 +1,20 @@
 @layer utilities {
+    /* 适配所有设备的内容可见性，保持原有功能 */
     .content-auto {
         content-visibility: auto;
     }
+
+    /* 调整阴影：让阴影更适合移动端，避免过于突兀 */
     .card-shadow {
-        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08); /* 较轻的阴影效果 */
     }
+
+    /* 输入框焦点：保留原有效果，确保与 Tailwind 配合使用 */
     .input-focus {
         @apply focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none;
     }
+
+    /* 状态徽章：增加 padding 和字体大小的应用 */
     .status-badge {
         @apply px-3 py-1 rounded-full text-sm font-medium;
     }
