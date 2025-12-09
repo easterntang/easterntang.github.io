@@ -5,14 +5,14 @@
     <!-- 关键：移动端视口适配（修复缩放/溢出问题） -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>文件/图片提交系统（云存储版）</title>
-    <!-- 外部CDN -->
+    <!-- 优先加载导出必需的库（解决 JSZip is not defined 核心问题） -->
+    <script src="https://unpkg.com/jszip@3.10.1/dist/jszip.min.js"></script>
+    <script src="https://unpkg.com/file-saver@2.0.5/dist/FileSaver.min.js"></script>
+    <!-- 其他外部CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.min.css" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/leancloud-storage@4.15.0/dist/av-min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-    <!-- 新增：导出ZIP必需的JSZip和FileSaver CDN（解决导出报错） -->
-    <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/file-saver@2.0.5/dist/FileSaver.min.js"></script>
     <!-- 自定义CSS -->
     <link rel="stylesheet" href="file-submit.css">
     <!-- Tailwind 配置 -->
@@ -301,7 +301,7 @@
                     </div>
                 </div>
 
-                <!-- 提交按钮：移动端全屏宽度 -->
+                <!-- 提交按钮：移动端全屏宽度，默认禁用 -->
                 <div class="flex flex-col sm:flex-row gap-3 justify-center">
                     <button id="submit-file-btn" onclick="submitFile()" class="px-6 py-3 bg-primary text-white rounded-lg hover:bg-primary/90 transition-all text-base font-medium flex-1" disabled>
                         提交文件
