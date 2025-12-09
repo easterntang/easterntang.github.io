@@ -768,4 +768,3 @@ uploadArea.addEventListener('drop', async (e) => {
 window.onload = async function() {
     await updateSystemStatusDisplay();
 };
-
