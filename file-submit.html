@@ -10,8 +10,9 @@
     <script src="https://cdn.jsdelivr.net/npm/leancloud-storage@4.15.0/dist/av-min.js"></script>
     <!-- XLSX Excel 解析库 -->
     <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-    <!-- 3. 引入自定义CSS和JS（JS必须在SDK之后） -->
+    <!-- 自定义CSS（保持原有引用） -->
     <link rel="stylesheet" href="file-submit.css">
+    <!-- 自定义JS（保持原有引用，无需修改） -->
     <script src="file-submit.js"></script>
     <!-- Tailwind 自定义配置 -->
     <script>
@@ -33,6 +34,24 @@
             }
         }
     </script>
+    <!-- 补充基础样式（兼容原有card-shadow、input-focus等类） -->
+    <style>
+        .card-shadow {
+            box-shadow: 0 2px 15px 0 rgba(0, 0, 0, 0.05);
+        }
+        .input-focus:focus {
+            outline: none;
+            border-color: #165DFF;
+            box-shadow: 0 0 0 2px rgba(22, 93, 255, 0.1);
+        }
+        .status-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+    </style>
 </head>
 <body class="bg-gray-50 min-h-screen">
     <!-- 页面容器 -->
@@ -206,7 +225,8 @@
                     <label class="block text-gray-700 mb-2" for="visitor-name">
                         请输入您的姓名
                     </label>
-                    <input type="text" id="visitor-name" class="w-full px-4 py-2 border border-gray-300 rounded-lg input-focus" placeholder="请输入您的姓名">
+                    <input type="text" id="visitor-name" class="w-full px-4 py-2 border border-gray-300 rounded-lg input-focus" placeholder="请输入您的姓名"
+                           oninput="this.value = this.value.replace(/[^\u4e00-\u9fa5a-zA-Z]/g, '').trim()">
                     <p id="name-error" class="text-danger text-sm mt-2 hidden">姓名不在提交名单中，请核对后重试</p>
                     <p id="system-status-error" class="text-danger text-sm mt-2 hidden">系统当前状态不允许提交操作，请联系房主</p>
                 </div>
@@ -221,7 +241,52 @@
             </div>
         </div>
 
-    </div>
+        <!-- 访客提交页面（补充缺失的核心区域） -->
+        <div id="visitor-submit" class="hidden">
+            <div class="bg-white rounded-xl card-shadow p-8">
+                <div class="flex justify-between items-center mb-6">
+                    <h2 class="text-2xl font-bold text-gray-800">文件提交</h2>
+                    <div>
+                        <span class="text-gray-600 mr-2">当前用户：</span>
+                        <span id="visitor-name-display" class="font-semibold text-primary">未识别</span>
+                    </div>
+                </div>
 
+                <!-- 拖拽上传区域（修复upload-area缺失问题） -->
+                <div id="upload-area" class="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center mb-6 hover:border-primary transition-all cursor-pointer">
+                    <i class="fa fa-cloud-upload text-4xl text-gray-400 mb-2"></i>
+                    <p class="text-gray-500 mb-4">拖拽文件到此处上传，或点击选择文件</p>
+                    <input type="file" id="file-upload" accept="image/*,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" class="hidden" onchange="handleFileSelect()">
+                    <label for="file-upload" class="px-6 py-2 bg-primary text-white rounded-lg hover:bg-primary/90 transition-all cursor-pointer">
+                        <i class="fa fa-file mr-1"></i> 选择文件
+                    </label>
+                </div>
+
+                <!-- 文件预览区域 -->
+                <div id="file-preview" class="mb-6 hidden">
+                    <h3 class="text-lg font-semibold mb-3">文件预览</h3>
+                    <div class="border border-gray-200 rounded-lg p-4">
+                        <!-- 图片预览 -->
+                        <img id="image-preview" class="max-w-full max-h-[300px] mx-auto mb-3 hidden" src="" alt="文件预览">
+                        <!-- 文件信息 -->
+                        <div id="file-info" class="text-center mb-3">
+                            <p id="file-name" class="text-gray-800 font-medium"></p>
+                            <p id="file-size" class="text-gray-500 text-sm"></p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 提交按钮区域 -->
+                <div class="flex gap-4 justify-center">
+                    <button id="submit-file-btn" onclick="submitFile()" class="px-8 py-3 bg-primary text-white rounded-lg hover:bg-primary/90 transition-all text-lg font-medium">
+                        提交文件
+                    </button>
+                    <button onclick="backToRoleSelection()" class="px-6 py-3 border border-gray-300 rounded-lg hover:bg-gray-50 transition-all">
+                        返回首页
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
 </body>
 </html>
