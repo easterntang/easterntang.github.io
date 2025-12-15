@@ -1,513 +1,639 @@
-// ========== 配置区（保持你原来的 LeanCloud 配置） ==========
+/******************************************************
+ * script.js
+ * 与 index.html 配合使用（单页，绿色简约风）
+ * Classes: NewSubmitter / NewSystemStatus
+ * 房主密码: 471695
+ * Room ID: file_submit_system_room_001_v2
+ ******************************************************/
+
+/* ========== LeanCloud 初始化（请保持原有配置） ========== */
 AV.init({
-    appId: "awjrq2pnF6yDBX2QT7Sq1dHQ-gzGzoHsz",
-    appKey: "WY6uq9q4hPthkwKX5JIHrlYk",
-    serverURL: "https://awjrq2pn.lc-cn-n1-shared.com"
+  appId: "awjrq2pnF6yDBX2QT7Sq1dHQ-gzGzoHsz",
+  appKey: "WY6uq9q4hPthkwKX5JIHrlYk",
+  serverURL: "https://awjrq2pn.lc-cn-n1-shared.com"
 });
 
-const ROOM_ID = "file_submit_system_room_001";
-const DEFAULT_OWNER_PASSWORD = "953191";
-const Submitter = AV.Object.extend('NewSubmitter');
-const SystemStatus = AV.Object.extend('NewSystemStatus');
+const CLASS_SUBMITTER = "NewSubmitter";
+const CLASS_SYSTEM = "NewSystemStatus";
+const OWNER_PASSWORD = "471695";
+const ROOM_ID = "file_submit_system_room_001_v2";
+const DEFAULT_MAX_FILES = 1;
+const MAX_FILE_BYTES = 15 * 1024 * 1024; // 15MB
 
-// ========== 帮助：显示/切换页面 ==========
-function showElement(id) {
-    ['role-selection','house-owner-login','house-owner-dashboard','visitor-verify','visitor-submit']
-        .forEach(i => document.getElementById(i) && (document.getElementById(i).style.display = 'none'));
-    const el = document.getElementById(id);
-    if (el) el.style.display = '';
-    if (id === 'house-owner-dashboard') updateHouseOwnerDashboard();
-    if (id === 'visitor-verify') checkVisitorSystemStatus();
+/* ========== 辅助短函数 ========== */
+const $ = id => document.getElementById(id);
+const show = elOrId => { const e = typeof elOrId === 'string' ? $(elOrId) : elOrId; if (e) e.classList.remove('hidden'); };
+const hide = elOrId => { const e = typeof elOrId === 'string' ? $(elOrId) : elOrId; if (e) e.classList.add('hidden'); };
+
+/* ========== ZIP lazy loader ========== */
+async function ensureZipReady() {
+  return new Promise((resolve, reject) => {
+    let need = 0, done = 0;
+    function ok() { done++; if (done >= need) resolve(); }
+    if (typeof JSZip === 'undefined') {
+      need++;
+      const s = document.createElement('script');
+      s.src = 'https://unpkg.com/jszip@3.10.1/dist/jszip.min.js';
+      s.onload = ok; s.onerror = reject; document.head.appendChild(s);
+    }
+    if (typeof saveAs === 'undefined') {
+      need++;
+      const s2 = document.createElement('script');
+      s2.src = 'https://unpkg.com/file-saver@2.0.5/dist/FileSaver.min.js';
+      s2.onload = ok; s2.onerror = reject; document.head.appendChild(s2);
+    }
+    if (need === 0) resolve();
+  });
 }
-function enterHouseOwnerMode(){ showElement('house-owner-login'); }
-function enterVisitorMode(){ showElement('visitor-verify'); }
-function backToRoleSelection(){ showElement('role-selection'); }
-function backToVisitorVerify(){ showElement('visitor-verify'); }
 
-// ========== 系统状态（只拉小字段） ==========
-async function getSystemStatusObj() {
-    const q = new AV.Query('SystemStatus');
+/* ========== System 管理 (NewSystemStatus) ========== */
+const system = {
+  async _getSystemObj(createIfMissing = true) {
+    const q = new AV.Query(CLASS_SYSTEM);
     q.equalTo('roomId', ROOM_ID);
-    const obj = await q.first();
-    if (!obj) {
-        const s = new SystemStatus();
-        s.set('roomId', ROOM_ID);
-        s.set('status', 'not_started');
-        await s.save();
-        return s;
+    const exist = await q.first();
+    if (exist) return exist;
+    if (!createIfMissing) return null;
+
+    const C = AV.Object.extend(CLASS_SYSTEM);
+    const s = new C();
+    s.set('roomId', ROOM_ID);
+    s.set('status', 'not_started');
+    s.set('maxFiles', DEFAULT_MAX_FILES);
+    s.set('ownerPass', OWNER_PASSWORD);
+    s.set('allowModify', true);
+
+    const acl = new AV.ACL();
+    acl.setPublicReadAccess(true);
+    acl.setPublicWriteAccess(true);
+    s.setACL(acl);
+
+    await s.save();
+    return s;
+  },
+
+  async getStatus() {
+    const s = await this._getSystemObj(false);
+    return s ? s.get('status') : 'not_started';
+  },
+
+  async updateUI() {
+    const s = await this._getSystemObj(true);
+    const status = s.get('status') || 'not_started';
+    const maxFiles = s.get('maxFiles') || DEFAULT_MAX_FILES;
+    const allowModify = s.get('allowModify') === true;
+
+    if ($('sys-status-badge')) {
+      $('sys-status-badge').textContent =
+        status === 'running' ? '运行中' :
+        status === 'paused' ? '已暂停' :
+        status === 'ended' ? '已结束' : '未开始';
     }
-    return obj;
-}
-async function getSystemStatus() {
-    const obj = await getSystemStatusObj();
-    return obj.get('status');
-}
-async function updateSystemStatusDisplay() {
-    const status = await getSystemStatus();
-    const map = {
-        not_started: ['未开始','background:#f3f4f6;color:#374151'],
-        running: ['运行中','background:#10B981;color:#ffffff'],
-        paused: ['已暂停','background:#F59E0B;color:#ffffff'],
-        ended: ['已结束','background:#EF4444;color:#ffffff']
-    };
-    const badge = document.getElementById('system-status-badge');
-    if (badge) {
-        badge.textContent = map[status][0];
-        badge.style.cssText = map[status][1] + ';padding:6px 10px;border-radius:999px;font-weight:700';
-    }
-    // 控制按钮
-    ['btn-start-system','btn-pause-system','btn-resume-system','btn-end-system'].forEach(id=>{
-        const el = document.getElementById(id);
-        if (el) el.style.display = 'none';
+
+    // 按钮显示逻辑
+    ['btn-start','btn-pause','btn-resume','btn-end'].forEach(id => {
+      if ($(id)) $(id).style.display = 'none';
     });
-    if (status === 'not_started') document.getElementById('btn-start-system').style.display = '';
+    if (status === 'not_started') $('btn-start') && ($('btn-start').style.display = '');
     if (status === 'running') {
-        document.getElementById('btn-pause-system').style.display = '';
-        document.getElementById('btn-end-system').style.display = '';
+      $('btn-pause') && ($('btn-pause').style.display = '');
+      $('btn-end') && ($('btn-end').style.display = '');
     }
     if (status === 'paused') {
-        document.getElementById('btn-resume-system').style.display = '';
-        document.getElementById('btn-end-system').style.display = '';
+      $('btn-resume') && ($('btn-resume').style.display = '');
+      $('btn-end') && ($('btn-end').style.display = '');
     }
 
-    // 同步访客侧 badge（如果存在）
-    const vBadge = document.getElementById('visitor-name-display');
-    // don't overwrite visitor name; instead we don't need extra visitor badge here
-}
-async function updateSystemStatus(newStatus) {
-    const q = new AV.Query('SystemStatus');
-    q.equalTo('roomId', ROOM_ID);
-    let obj = await q.first();
-    if (!obj) { obj = new SystemStatus(); obj.set('roomId', ROOM_ID); }
-    obj.set('status', newStatus);
-    await obj.save();
-    await updateSystemStatusDisplay();
-}
-function startSystem(){ if (confirm('确定开始？')) updateSystemStatus('running'); }
-function pauseSystem(){ if (confirm('确定暂停？')) updateSystemStatus('paused'); }
-function resumeSystem(){ if (confirm('确定恢复？')) updateSystemStatus('running'); }
-function endSystem(){ if (confirm('确定结束？结束不可恢复')) updateSystemStatus('ended'); }
-async function checkVisitorSystemStatus(){
-    const status = await getSystemStatus();
-    if (status !== 'running') {
-        alert('系统当前未开放提交');
-    }
-}
+    if ($('max-files-input')) $('max-files-input').value = maxFiles;
+    if ($('visitor-max-files')) $('visitor-max-files').textContent = maxFiles;
+    if ($('allow-modify-checkbox')) $('allow-modify-checkbox').checked = allowModify;
+  },
 
-// ========== 房主登录 ==========
-function verifyHouseOwnerPassword(){
-    const pwd = document.getElementById('owner-password').value;
-    if (pwd === DEFAULT_OWNER_PASSWORD) showElement('house-owner-dashboard');
-    else document.getElementById('password-error').style.display = '';
-}
-
-// ========== 名单管理（优化：查询时不拉 files 字段） ==========
-async function addSubmitter(){
-    const name = document.getElementById('add-name').value.trim();
-    if (!name) return;
-    // check exists
-    const q = new AV.Query('Submitter');
-    q.equalTo('roomId', ROOM_ID);
-    q.equalTo('name', name);
-    const ex = await q.first();
-    if (ex) return alert('该姓名已存在');
-    const s = new Submitter();
-    s.set('roomId', ROOM_ID);
-    s.set('name', name);
-    s.set('submitted', false);
-    s.set('files', []);
-    s.set('maxCount', 1);
+  async updateStatus(newStatus) {
+    const s = await this._getSystemObj(true);
+    s.set('status', newStatus);
     await s.save();
-    document.getElementById('add-name').value = '';
-    updateHouseOwnerDashboard();
+    await this.updateUI();
+    await refreshDashboard();
+  },
+
+  start() { if (confirm('确认开始系统？')) this.updateStatus('running'); },
+  pause() { if (confirm('确认暂停系统？')) this.updateStatus('paused'); },
+  resume(){ if (confirm('确认恢复系统？')) this.updateStatus('running'); },
+  end(){ if (confirm('确认结束系统？结束后不可恢复')) this.updateStatus('ended'); },
+
+  async setMaxFiles() {
+    const v = parseInt($('max-files-input').value, 10) || DEFAULT_MAX_FILES;
+    const s = await this._getSystemObj(true);
+    s.set('maxFiles', v);
+    await s.save();
+    alert('已保存最大上传数：' + v);
+    await this.updateUI();
+  }
+};
+
+/* ========== 导航与页面切换 ========== */
+function hideAllPages() {
+  ['page-home','page-visitor-verify','page-visitor-submit','page-visitor-view','page-owner-login','page-owner-dashboard'].forEach(id => hide(id));
+}
+function goHome() {
+  hideAllPages();
+  show('page-home');
+}
+function goVisitor() {
+  hideAllPages();
+  show('page-visitor-verify');
+}
+function goOwnerLogin() {
+  hideAllPages();
+  show('page-owner-login');
 }
 
-async function importSubmitterList(){
-    const input = document.getElementById('import-list');
-    const file = input.files[0];
-    if (!file) return;
-    const fname = file.name.toLowerCase();
-    const reader = new FileReader();
-    reader.onload = async (e) => {
-        let names = [];
-        if (fname.endsWith('.txt')) {
-            names = e.target.result.split('\n').map(r=>r.trim()).filter(r=>r);
-        } else if (fname.endsWith('.csv')) {
-            names = e.target.result.split('\n').map(line=>line.split(',')[0].trim()).filter(r=>r);
-        } else if (fname.endsWith('.xlsx')||fname.endsWith('.xls')) {
-            const data = new Uint8Array(e.target.result);
-            const wb = XLSX.read(data, {type:'array'});
-            const sheet = wb.Sheets[wb.SheetNames[0]];
-            const json = XLSX.utils.sheet_to_json(sheet, {header:1});
-            names = json.map(r=> (r[0]||'').toString().trim()).filter(r=>r);
-        }
-        if (!names.length) { alert('未识别到有效姓名'); input.value=''; return; }
-        // check duplicates and create
-        const q = new AV.Query('Submitter');
-        q.equalTo('roomId', ROOM_ID);
-        q.containedIn('name', names);
-        const exists = await q.find();
-        const existNames = exists.map(i=>i.get('name'));
-        const newNames = names.filter(n=> !existNames.includes(n));
-        const arr = newNames.map(n=>{
-            const s = new Submitter();
-            s.set('roomId', ROOM_ID);
-            s.set('name', n);
-            s.set('submitted', false);
-            s.set('files', []);
-            s.set('maxCount', 1);
-            return s;
-        });
-        if (arr.length) await AV.Object.saveAll(arr);
-        alert(`导入完成：新增 ${arr.length} 条`);
-        input.value='';
-        updateHouseOwnerDashboard();
-    };
-    if (fname.endsWith('.xlsx')||fname.endsWith('.xls')) reader.readAsArrayBuffer(file);
-    else reader.readAsText(file);
-}
+/* ========== Owner API ========== */
+const owner = {
+  async login() {
+    const pwd = ($('owner-pass-input').value || '').trim();
+    if (pwd !== OWNER_PASSWORD) return alert('房主密码错误');
+    hideAllPages();
+    show('page-owner-dashboard');
+    await system.updateUI();
+    await refreshDashboard();
+  },
 
-async function deleteSubmitter(id){
-    if (!confirm('确定删除？')) return;
-    const obj = AV.Object.createWithoutData('Submitter', id);
-    await obj.destroy({ useMasterKey: true });
-    updateHouseOwnerDashboard();
-}
-
-// ========== 设置上传限制（会逐条更新现有记录的 maxCount 字段） ==========
-async function updateUploadLimit(){
-    const limit = Number(document.getElementById('max-upload-count').value) || 1;
-    if (limit < 1) { alert('数量不能小于1'); return; }
-    // fetch all submitters (only ids and name) -  but we'll update each object to set maxCount
-    const q = new AV.Query('Submitter');
-    q.equalTo('roomId', ROOM_ID);
-    q.limit(1000);
-    const list = await q.find();
-    for (const item of list) {
-        item.set('maxCount', limit);
-        await item.save();
-    }
-    alert('上传限制已更新（已应用到现有用户）');
-}
-
-// ========== 更新房主仪表盘（关键优化：不拉 files 字段） ==========
-async function updateHouseOwnerDashboard(){
-    try {
-        // 只请求小字段，避免拉出 files（base64）造成卡顿
-        const q = new AV.Query('Submitter');
-        q.equalTo('roomId', ROOM_ID);
-        q.select('name','submitted','submitTime','maxCount'); // 关键：限定字段
-        q.limit(500); // 上限，避免一次性请求过多
-        const list = await q.find();
-
-        // 统计
-        const total = list.length;
-        const submitted = list.filter(i=>i.get('submitted')).length;
-        const unsubmitted = total - submitted;
-        document.getElementById('total-count').textContent = total;
-        document.getElementById('submitted-count').textContent = submitted;
-        document.getElementById('unsubmitted-count').textContent = unsubmitted;
-
-        // 名单渲染（轻量，仅渲染必要信息）
-        const container = document.getElementById('submitter-list-container');
-        container.innerHTML = '';
-        if (!list.length) {
-            container.innerHTML = `<div style="padding:16px;color:#6b7280">暂无名单</div>`;
-        } else {
-            for (const item of list) {
-                const id = item.id;
-                const name = item.get('name');
-                const submittedFlag = item.get('submitted');
-                const statusText = submittedFlag ? '已提交' : '未提交';
-                const statusClass = submittedFlag ? 'text-success' : 'text-warning';
-                // row
-                const row = document.createElement('div');
-                row.className = 'grid-cols-12';
-                row.style.padding = '10px';
-                row.style.display = 'grid';
-                row.style.gridTemplateColumns = 'repeat(12,1fr)';
-                row.style.borderBottom = '1px solid #f1f5f9';
-                row.innerHTML = `
-                    <div style="grid-column:span 6">${escapeHtml(name)}</div>
-                    <div style="grid-column:span 3;color:${submittedFlag ? '#10B981' : '#F59E0B'}">${statusText}</div>
-                    <div style="grid-column:span 3;text-align:center">
-                        <button class="btn" onclick="deleteSubmitter('${id}')">删除</button>
-                    </div>
-                `;
-                container.appendChild(row);
-            }
-        }
-
-        // 提交记录 — 只显示已提交人员（但不拉 files）
-        const rec = document.getElementById('submission-records-container');
-        rec.innerHTML = '';
-        const submittedList = list.filter(i=>i.get('submitted'));
-        if (!submittedList.length) {
-            rec.innerHTML = `<div style="padding:12px;color:#6b7280">暂无提交记录</div>`;
-        } else {
-            for (const item of submittedList) {
-                const id = item.id;
-                const name = item.get('name');
-                const time = item.get('submitTime') || '';
-                // 文件数量未知（因为没拉 files），显示“已提交（点击查看）”
-                const row = document.createElement('div');
-                row.style.display = 'grid';
-                row.style.gridTemplateColumns = 'repeat(12,1fr)';
-                row.style.padding = '10px';
-                row.style.borderBottom = '1px solid #f1f5f9';
-                row.innerHTML = `
-                    <div style="grid-column:span 4">${escapeHtml(name)}</div>
-                    <div style="grid-column:span 5">已提交（点击查看）</div>
-                    <div style="grid-column:span 3;font-size:12px;color:#6b7280">${escapeHtml(time)}</div>
-                    <div style="grid-column:span 12;text-align:right;margin-top:8px">
-                        <button class="btn btn-primary" onclick="viewSubmitterFiles('${id}')">查看 / 导出</button>
-                    </div>
-                `;
-                rec.appendChild(row);
-            }
-        }
-
-    } catch (err) {
-        console.error('更新仪表盘失败：', err);
-        alert('更新仪表盘失败，请检查控制台错误信息');
-    }
-}
-
-// ========== 访客验证 & 提交（保持现有功能） ==========
-async function verifyVisitorName(){
-    const name = document.getElementById('visitor-name').value.trim();
-    if (!name) return;
-    const q = new AV.Query('Submitter');
+  async addName() {
+    const name = ($('add-name-input').value || '').trim();
+    if (!name) return alert('请输入姓名');
+    // check duplicates
+    const q = new AV.Query(CLASS_SUBMITTER);
     q.equalTo('roomId', ROOM_ID);
     q.equalTo('name', name);
-    // 仅拉小字段
-    q.select('name','submitted','maxCount');
-    const obj = await q.first();
-    if (!obj) {
-        document.getElementById('name-error').style.display = '';
-        return;
-    }
-    document.getElementById('name-error').style.display = 'none';
-    // 存缓存
-    localStorage.setItem('currentVisitor', JSON.stringify({ name, objectId: obj.id }));
-    localStorage.setItem('maxCount', obj.get('maxCount') || 1);
-    document.getElementById('visitor-name-display').textContent = name;
-    showElement('visitor-submit');
-}
+    if (await q.first()) return alert('该姓名已存在');
+    const C = AV.Object.extend(CLASS_SUBMITTER);
+    const o = new C();
+    o.set('roomId', ROOM_ID);
+    o.set('name', name);
+    o.set('submitted', false);
+    o.set('files', []);
+    o.set('submitTime', '');
+    o.set('order', Date.now());
+    const acl = new AV.ACL(); acl.setPublicReadAccess(true); acl.setPublicWriteAccess(true); o.setACL(acl);
+    await o.save();
+    $('add-name-input').value = '';
+    await refreshDashboard();
+  },
 
-function handleFileSelect(){
-    const input = document.getElementById('file-upload');
-    const files = Array.from(input.files || []);
-    const maxCount = Number(localStorage.getItem('maxCount')) || 1;
-    if (files.length === 0) return;
-    if (files.length > maxCount) {
-        alert(`最多只能上传 ${maxCount} 个文件`);
-        input.value = '';
-        return;
-    }
-    const preview = document.getElementById('preview-list');
-    preview.innerHTML = '';
-    for (const f of files) {
-        const item = document.createElement('div');
-        item.style.padding = '8px';
-        item.style.border = '1px solid #eef2ff';
-        item.style.borderRadius = '8px';
-        item.innerHTML = `<div style="font-weight:600">${escapeHtml(f.name)}</div><div style="color:#6b7280;font-size:13px">${(f.size/1024).toFixed(1)} KB</div>`;
-        preview.appendChild(item);
-    }
-    document.getElementById('file-preview').style.display = '';
-    document.getElementById('submit-file-btn').disabled = false;
-}
+  // show reset dialog
+  showResetDialog() {
+    show('reset-dialog');
+  },
+  hideResetDialog() {
+    hide('reset-dialog');
+  },
 
-async function submitFile(){
-    const input = document.getElementById('file-upload');
-    const files = Array.from(input.files || []);
-    if (!files.length) { alert('请选择文件'); return; }
-    const visitor = JSON.parse(localStorage.getItem('currentVisitor') || '{}');
-    if (!visitor || !visitor.objectId) { alert('访客未识别'); backToVisitorVerify(); return; }
-
-    // 读取 base64 并保存到 submitter.files（和你原 DB 保持一致）
-    const uploaded = [];
-    for (const file of files) {
-        const base64 = await new Promise(res=>{
-            const r = new FileReader();
-            r.onload = e => res(e.target.result);
-            r.readAsDataURL(file);
-        });
-        uploaded.push({ url: base64, name: file.name, type: file.type, size: file.size });
-    }
-
-    const obj = AV.Object.createWithoutData('Submitter', visitor.objectId);
-    obj.set('submitted', true);
-    obj.set('files', uploaded);
-    obj.set('submitTime', new Date().toLocaleString());
-    await obj.save();
-    alert('提交成功');
-    backToVisitorVerify();
-}
-
-// ========== 单人查看（按需拉 files） ==========
-async function viewSubmitterFiles(id){
+  // delete all: delete records in NewSubmitter
+  async resetAll() {
+    if (!confirm('最终确认：将删除所有名单与文件？此操作不可恢复')) return;
     try {
-        // 展示加载状态
-        const modal = document.getElementById('file-viewer-modal');
-        const content = document.getElementById('file-viewer-content');
-        const progress = document.getElementById('file-viewer-progress');
-        content.innerHTML = '';
-        progress.innerHTML = '<div class="spinner"></div><div style="color:#6b7280">正在加载...</div>';
-        modal.style.display = '';
+      const q = new AV.Query(CLASS_SUBMITTER);
+      q.equalTo('roomId', ROOM_ID);
+      const all = await q.find({ useMasterKey: true });
+      for (const it of all) {
+        await it.destroy();
+      }
+      // reset system fields
+      const s = await system._getSystemObj(true);
+      s.set('status', 'not_started');
+      s.set('maxFiles', DEFAULT_MAX_FILES);
+      s.set('allowModify', true);
+      await s.save();
+      alert('已删除所有名单与文件，系统重置');
+      hide('reset-dialog');
+      await refreshDashboard();
+    } catch (e) {
+      console.error(e);
+      alert('重置失败：' + e.message);
+    }
+  },
 
-        // 只在此处 fetch 完整对象（包含 files）
-        const q = new AV.Query('Submitter');
-        const obj = await q.get(id);
+  // reset files only
+  async resetFilesOnly() {
+    if (!confirm('确认仅删除所有已提交的文件与提交状态？名单将保留（保留房主输入顺序）')) return;
+    try {
+      const q = new AV.Query(CLASS_SUBMITTER);
+      q.equalTo('roomId', ROOM_ID);
+      const all = await q.find();
+      for (const it of all) {
+        it.set('files', []);
+        it.set('submitted', false);
+        it.set('submitTime', '');
+        await it.save();
+      }
+      const s = await system._getSystemObj(true);
+      s.set('status', 'not_started');
+      await s.save();
+      alert('已清空所有文件并将提交状态设置为未提交（名单保留）');
+      hide('reset-dialog');
+      await refreshDashboard();
+    } catch (e) {
+      console.error(e);
+      alert('操作失败：' + e.message);
+    }
+  },
 
-        progress.innerHTML = '';
-        const files = obj.get('files') || [];
-        if (!files.length) {
-            content.innerHTML = '<div style="color:#6b7280">该用户未提交任何文件</div>';
-        } else {
-            for (const f of files) {
-                const box = document.createElement('div');
-                box.style.border = '1px solid #eef2ff';
-                box.style.padding = '8px';
-                box.style.borderRadius = '8px';
-                let inner = `<div style="font-weight:700">${escapeHtml(f.name)}</div>`;
-                inner += `<div style="color:#6b7280;font-size:13px">${(f.size/1024).toFixed(1)} KB</div>`;
-                if ((f.type||'').startsWith('image/')) {
-                    inner += `<div style="margin-top:6px"><img src="${f.url}" style="max-width:100%;max-height:220px;border-radius:6px" alt="${escapeHtml(f.name)}" /></div>`;
-                } else {
-                    inner += `<div style="margin-top:6px;color:#6b7280">非图片类型，无法预览</div>`;
-                }
-                box.innerHTML = inner;
-                content.appendChild(box);
-            }
+  // export single user (compatible AV.File / JSON)
+  async exportOne(id, name) {
+    await ensureZipReady();
+    try {
+      const obj = AV.Object.createWithoutData(CLASS_SUBMITTER, id);
+      const it = await obj.fetch();
+      const files = it.get('files') || [];
+      if (!files.length) return alert('该用户没有提交文件');
+      const zip = new JSZip();
+      const folder = zip.folder(name || 'user');
+      for (const f of files) {
+        let fileUrl = '', fileName = '';
+        if (typeof f.url === 'function') { fileUrl = f.url(); fileName = f.name(); }
+        else { fileUrl = f.url; fileName = f.name; }
+        try {
+          const resp = await fetch(fileUrl);
+          if (!resp.ok) { console.warn('fetch failed', fileUrl); continue; }
+          const blob = await resp.blob();
+          folder.file(fileName, blob);
+        } catch (err) {
+          console.warn('download fail', fileUrl, err);
         }
-
-        // 绑定导出事件（保存当前对象）
-        document.getElementById('export-single-btn').onclick = () => exportSingleUserFiles(obj);
-
-    } catch (err) {
-        console.error('查看单人失败', err);
-        alert('加载该用户提交内容失败，请稍后重试');
-        closeFileViewer();
+      }
+      const blob = await zip.generateAsync({ type: 'blob' });
+      saveAs(blob, `${name || 'user'}_files.zip`);
+    } catch (e) {
+      console.error(e);
+      alert('导出失败：' + e.message);
     }
-}
+  },
 
-function closeFileViewer(){
-    document.getElementById('file-viewer-modal').style.display = 'none';
-}
-
-// ========== 导出单人所有文件（顺序处理） ==========
-async function exportSingleUserFiles(userObj) {
-    const files = userObj.get('files') || [];
-    if (!files.length) return alert('无可导出文件');
-
-    // 使用 JSZip 顺序打包（避免并发导致内存占用暴涨）
+  // export all
+  async exportAll() {
+    await ensureZipReady();
     try {
-        const zip = new JSZip();
-        let idx = 0;
+      // get all, sort by order (owner input) but we'll place submitted first later in refresh; here export by order
+      const q = new AV.Query(CLASS_SUBMITTER);
+      q.equalTo('roomId', ROOM_ID);
+      q.ascending('order');
+      const rows = await q.find();
+      if (!rows.length) return alert('暂无用户可导出');
+      const zip = new JSZip();
+      for (const it of rows) {
+        const name = it.get('name') || 'unknown';
+        const files = it.get('files') || [];
+        const folder = zip.folder(name);
+        if (!files.length) { folder.file('（无文件）.txt', '该用户未提交文件'); continue; }
         for (const f of files) {
-            idx++;
-            // small UI hint
-            document.getElementById('file-viewer-progress').innerText = `正在处理 ${idx}/${files.length} ...`;
-            const blob = dataURLToBlob(f.url);
-            zip.file(f.name, blob);
-            await sleep(50); // 稍微让出一点主线程，避免页面无响应（小延迟）
+          let fileUrl = '', fileName = '';
+          if (typeof f.url === 'function') { fileUrl = f.url(); fileName = f.name(); }
+          else { fileUrl = f.url; fileName = f.name; }
+          try {
+            const resp = await fetch(fileUrl);
+            if (!resp.ok) { console.warn('fetch failed', fileUrl); continue; }
+            const blob = await resp.blob();
+            folder.file(fileName, blob);
+          } catch (err) {
+            console.warn('download fail', fileUrl, err);
+          }
         }
-        const dateStr = new Date().toLocaleDateString().replace(/\//g,'-');
-        const filename = `${userObj.get('name')}_${dateStr}.zip`;
-        const content = await zip.generateAsync({type:'blob',compression:'DEFLATE'});
-        saveAs(content, filename);
-        document.getElementById('file-viewer-progress').innerText = '导出完成';
-    } catch (err) {
-        console.error('导出单人文件失败', err);
-        alert('导出失败，请检查控制台');
+      }
+      const blob = await zip.generateAsync({ type: 'blob' });
+      saveAs(blob, '全部文件.zip');
+    } catch (e) {
+      console.error(e);
+      alert('导出全部失败：' + e.message);
     }
-}
+  },
 
-// ========== 导出全部已提交（按需顺序拉取每个对象的 files） ==========
-async function exportAllSubmittedFiles(){
-    if (!confirm('导出全部已提交的文件可能需要一些时间，确定继续？')) return;
+  // update allowModify from checkbox
+  async updateAllowModify() {
+    const checked = !!$('allow-modify-checkbox').checked;
+    const s = await system._getSystemObj(true);
+    s.set('allowModify', checked);
+    await s.save();
+    alert('已保存：提交后允许修改 = ' + (checked ? '是' : '否'));
+  }
+};
 
-    // show progress in a modal-like alert area
-    const progressEl = document.createElement('div');
-    progressEl.style.position='fixed';
-    progressEl.style.right='16px';
-    progressEl.style.bottom='16px';
-    progressEl.style.background='white';
-    progressEl.style.padding='10px';
-    progressEl.style.border='1px solid #eef2ff';
-    progressEl.style.borderRadius='10px';
-    progressEl.style.boxShadow='0 6px 20px rgba(8,15,25,0.06)';
-    progressEl.innerHTML = `<div style="font-weight:700;margin-bottom:6px">导出进度</div><div id="export-all-status">初始化...</div>`;
-    document.body.appendChild(progressEl);
+/* ========== Visitor 功能 ========== */
+const visitor = {
+  targetObj: null,
+  selectedFiles: [],
+
+  async verify() {
+    const name = ($('visitor-name-input').value || '').trim();
+    if (!name) return alert('请输入姓名');
+
+    const sys = await system._getSystemObj(true);
+    const status = sys.get('status');
+    if (status === 'paused') return alert('系统已暂停，当前无法提交');
+
+    const q = new AV.Query(CLASS_SUBMITTER);
+    q.equalTo('roomId', ROOM_ID);
+    q.equalTo('name', name);
+    const it = await q.first();
+    if (!it) return alert('姓名未在名单中，请联系房主');
+
+    this.targetObj = it;
+
+    // if submitted -> show view page; else go to submit page
+    if (it.get('submitted')) {
+      // show view page (allow download and maybe re-submit)
+      hideAllPages();
+      show('page-visitor-view');
+      await this.renderSubmittedView();
+    } else {
+      hideAllPages();
+      show('page-visitor-submit');
+      // set visitor max
+      $('visitor-max-files').textContent = sys.get('maxFiles') || DEFAULT_MAX_FILES;
+      // clear selection
+      this.selectedFiles = [];
+      if ($('visitor-file-list')) $('visitor-file-list').innerHTML = '';
+      if ($('selected-count')) $('selected-count').textContent = '0';
+    }
+  },
+
+  async renderSubmittedView() {
+    const it = this.targetObj;
+    const sys = await system._getSystemObj(true);
+    const allowModify = sys.get('allowModify') === true;
+    const files = it.get('files') || [];
+    const area = $('visitor-files-display');
+    area.innerHTML = '';
+
+    const title = document.createElement('div');
+    title.style.fontWeight = '600';
+    title.textContent = `你已提交 ${files.length} 个文件`;
+    area.appendChild(title);
+
+    files.forEach(f => {
+      const link = document.createElement('a');
+      let url = '', namef = '';
+      if (typeof f.url === 'function') { url = f.url(); namef = f.name(); }
+      else { url = f.url; namef = f.name; }
+      link.href = url;
+      link.textContent = namef;
+      link.target = '_blank';
+      const p = document.createElement('div');
+      p.style.marginTop = '8px';
+      p.appendChild(link);
+      area.appendChild(p);
+    });
+
+    if (allowModify) {
+      const note = document.createElement('div');
+      note.className = 'small';
+      note.style.marginTop = '10px';
+      note.textContent = '系统允许修改，若需重新提交请点击“重新提交”按钮';
+      area.appendChild(note);
+      const btn = document.createElement('button');
+      btn.className = 'btn';
+      btn.style.marginTop = '10px';
+      btn.textContent = '重新提交';
+      btn.onclick = () => {
+        // go to submit page and keep targetObj; show upload area
+        hideAllPages();
+        show('page-visitor-submit');
+        $('visitor-max-files').textContent = sys.get('maxFiles') || DEFAULT_MAX_FILES;
+      };
+      area.appendChild(btn);
+    } else {
+      const note = document.createElement('div');
+      note.className = 'small';
+      note.style.marginTop = '10px';
+      note.textContent = '系统设置为提交后不可修改。如需修改请联系房主';
+      area.appendChild(note);
+    }
+  },
+
+  onSelectFiles(files) {
+    const arr = Array.from(files || []);
+    const max = parseInt($('visitor-max-files').textContent, 10) || DEFAULT_MAX_FILES;
+    if (arr.length > max) return alert(`最多允许上传 ${max} 个文件`);
+    for (const f of arr) {
+      if (f.size > MAX_FILE_BYTES) return alert(`文件 ${f.name} 超过 15MB`);
+    }
+    this.selectedFiles = arr;
+    // render preview list (if exists)
+    if ($('visitor-file-list')) $('visitor-file-list').innerHTML = '';
+    arr.forEach(f => {
+      const wrap = document.createElement('div');
+      wrap.style.display = 'inline-block';
+      wrap.style.marginRight = '10px';
+      if (f.type && f.type.startsWith('image/')) {
+        const img = document.createElement('img');
+        img.src = URL.createObjectURL(f);
+        img.className = 'file-preview-img';
+        wrap.appendChild(img);
+      } else {
+        const box = document.createElement('div');
+        box.style.width = '100px';
+        box.style.height = '100px';
+        box.style.display = 'flex';
+        box.style.alignItems = 'center';
+        box.style.justifyContent = 'center';
+        box.style.border = '1px solid #e5e7eb';
+        box.style.borderRadius = '8px';
+        box.textContent = f.name;
+        wrap.appendChild(box);
+      }
+      if ($('visitor-file-list')) $('visitor-file-list').appendChild(wrap);
+    });
+  },
+
+  async submit() {
+    const sys = await system._getSystemObj(true);
+    if (sys.get('status') === 'paused') return alert('系统已暂停，当前无法提交');
+    if (!this.targetObj) return alert('未验证身份');
+    if (!this.selectedFiles.length) return alert('请选择文件后提交');
 
     try {
-        // 先查询所有已提交者的 id（不拉 files）
-        const q = new AV.Query('Submitter');
-        q.equalTo('roomId', ROOM_ID);
-        q.equalTo('submitted', true);
-        q.select(); // 保证不拉大量字段
-        q.limit(1000);
-        const list = await q.find();
-        if (!list.length) { alert('暂无提交文件'); document.body.removeChild(progressEl); return; }
+      const it = this.targetObj;
+      // upload each file to leancloud
+      const uploaded = [];
+      for (const f of this.selectedFiles) {
+        const avf = new AV.File(f.name, f);
+        const saved = await avf.save();
+        uploaded.push(saved);
+      }
+      // set files (overwrite)
+      it.set('files', uploaded);
+      it.set('submitted', true);
+      it.set('submitTime', new Date().toLocaleString());
+      await it.save();
+      alert('提交成功');
+      // 显示感谢文案
+const thanksBox = document.getElementById('visitor-thanks');
+if (thanksBox) {
+    const userName = this.targetObj.get('name');
+    thanksBox.innerHTML = `
+        感谢 <span style="color:#059669">${userName}</span>
+        对本次收集的支持与理解，<br>
+        下次访问，我们再会！
+    `;
+    thanksBox.classList.remove('hidden');
+}
 
-        const zip = new JSZip();
-        let countUsers = list.length;
-        let processedUsers = 0;
-        for (const userMeta of list) {
-            processedUsers++;
-            document.getElementById('export-all-status').innerText = `正在处理 ${processedUsers}/${countUsers} (${escapeHtml(userMeta.id)})`;
-            // 单独拉取该用户完整对象（包含 files）
-            const q2 = new AV.Query('Submitter');
-            const userObj = await q2.get(userMeta.id);
-            const files = userObj.get('files') || [];
-            for (const f of files) {
-                // add to zip (f.url is base64)
-                try {
-                    const blob = dataURLToBlob(f.url);
-                    // prefix with username to avoid name collision
-                    zip.file(`${userObj.get('name')}_${f.name}`, blob);
-                } catch (err) {
-                    console.warn('跳过处理失败的文件', f.name, err);
-                }
-            }
-            await sleep(40); // 小间隔，避免锁住 UI
-        }
-        document.getElementById('export-all-status').innerText = '打包中...';
-        const blob = await zip.generateAsync({type:'blob',compression:'DEFLATE'});
-        const dateStr = new Date().toLocaleDateString().replace(/\//g,'-');
-        saveAs(blob, `全部提交_${dateStr}.zip`);
-        document.getElementById('export-all-status').innerText = '导出完成';
-        setTimeout(()=>document.body.removeChild(progressEl), 2000);
-    } catch (err) {
-        console.error('导出全部失败', err);
-        alert('导出失败，请查看控制台');
-        if (document.body.contains(progressEl)) document.body.removeChild(progressEl);
+      // go to view page
+      await this.renderSubmittedView();
+      hideAllPages();
+      show('page-visitor-view');
+      await refreshDashboard();
+    } catch (e) {
+      console.error(e);
+      alert('提交失败：' + e.message);
     }
+  },
+
+  cancel() {
+    this.selectedFiles = [];
+    goHome();
+  }
+};
+
+/* ========== 刷新房主列表（已提交优先，未提交按 order） ========== */
+async function refreshDashboard() {
+  const container = $('owner-list');
+  container.innerHTML = '';
+  // fetch all submitters
+  const q = new AV.Query(CLASS_SUBMITTER);
+  q.equalTo('roomId', ROOM_ID);
+  const rows = await q.find();
+
+  // separate submitted / unsubmitted
+  const submitted = rows.filter(r => r.get('submitted') === true).sort((a,b) => {
+    // try submitTime descending (newest first)
+    const ta = a.get('submitTime') || '';
+    const tb = b.get('submitTime') || '';
+    if (ta && tb) return ta < tb ? 1 : (ta > tb ? -1 : 0);
+    return (b.get('order') || 0) - (a.get('order') || 0);
+  });
+  const unsubmitted = rows.filter(r => !r.get('submitted')).sort((a,b) => (a.get('order')||0) - (b.get('order')||0));
+  let combined = [...submitted, ...unsubmitted];
+
+  // apply search filter
+  const kw = ($('owner-search-input').value || '').trim().toLowerCase();
+  if (kw) combined = combined.filter(r => (r.get('name') || '').toLowerCase().includes(kw));
+
+  for (const it of combined) {
+    const name = it.get('name') || '';
+    const submittedFlag = !!it.get('submitted');
+    const submitTime = it.get('submitTime') || '';
+    const files = it.get('files') || [];
+
+    const row = document.createElement('div');
+    row.className = 'grid-row';
+
+    const c1 = document.createElement('div'); c1.style.gridColumn = 'span 2'; c1.textContent = name;
+    const c2 = document.createElement('div'); c2.style.gridColumn = 'span 1'; c2.style.textAlign = 'center';
+    c2.innerHTML = submittedFlag ? '<span style="background:#10b981;padding:6px;border-radius:6px;color:white;font-weight:600">已提交</span>' : '<span style="background:#e5f6ee;padding:6px;border-radius:6px;color:#065f46;font-weight:600">未提交</span>';
+    const c3 = document.createElement('div'); c3.style.gridColumn = 'span 1'; c3.style.textAlign = 'center'; c3.textContent = submitTime;
+    const c4 = document.createElement('div'); c4.style.gridColumn = 'span 1'; c4.style.textAlign = 'center'; c4.textContent = files.length;
+    const c5 = document.createElement('div'); c5.style.gridColumn = 'span 2'; c5.style.textAlign = 'center';
+
+    const btnExport = document.createElement('button'); btnExport.className = 'btn-small'; btnExport.textContent = '导出'; btnExport.onclick = () => owner.exportOne(it.id, name);
+    const btnDelete = document.createElement('button'); btnDelete.className = 'btn-small btn-danger'; btnDelete.textContent = '删除'; btnDelete.style.marginLeft = '8px'; btnDelete.onclick = () => { if (confirm('确认删除该用户？')) owner.delete(it.id); };
+
+    c5.appendChild(btnExport);
+    c5.appendChild(btnDelete);
+
+    row.appendChild(c1); row.appendChild(c2); row.appendChild(c3); row.appendChild(c4); row.appendChild(c5);
+    container.appendChild(row);
+  }
 }
 
-// ========== utils ==========
-function dataURLToBlob(dataURL) {
-    // same as before — synchronous conversion (base64 -> Blob)
-    const arr = dataURL.split(',');
-    const mime = (arr[0].match(/:(.*?);/) || [])[1] || '';
-    const bstr = atob(arr[1] || '');
-    let n = bstr.length;
-    const u8 = new Uint8Array(n);
-    while (n--) u8[n] = bstr.charCodeAt(n);
-    return new Blob([u8], {type: mime});
-}
+/* ========== 页面初始化 ========== */
+document.addEventListener('DOMContentLoaded', async () => {
+  // initial show home
+  goHome();
 
-function escapeHtml(s) {
-    if (!s && s!==0) return '';
-    return String(s).replace(/[&<>"']/g, function(m){
-        return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m];
+  // ensure system object exists and UI updated
+  try { await system._getSystemObj(true); await system.updateUI(); } catch (e) { console.error(e); }
+
+  // hook up buttons that were inline in HTML (start/pause/resume/end)
+  $('btn-start') && ($('btn-start').onclick = () => system.start());
+  $('btn-pause') && ($('btn-pause').onclick = () => system.pause());
+  $('btn-resume') && ($('btn-resume').onclick = () => system.resume());
+  $('btn-end') && ($('btn-end').onclick = () => system.end());
+
+  // reset dialog buttons
+  // The HTML buttons call owner.resetAll / owner.resetFilesOnly / owner.hideResetDialog directly
+
+  // drag/drop area
+  const area = $('upload-area');
+  if (area) {
+    area.addEventListener('dragover', e => { e.preventDefault(); area.style.borderColor = '#10b981'; });
+    area.addEventListener('dragleave', e => { e.preventDefault(); area.style.borderColor = '#9ca3af'; });
+    area.addEventListener('drop', e => {
+      e.preventDefault(); area.style.borderColor = '#9ca3af';
+      const files = e.dataTransfer.files;
+      if (files && files.length) visitor.onSelectFiles(files);
     });
-}
-function sleep(ms){ return new Promise(res=>setTimeout(res,ms)); }
+  }
 
-// ========== 页面初始化 ==========
-window.addEventListener('load', async ()=>{
-    await updateSystemStatusDisplay();
+  // file input
+  const fileInput = $('visitor-file-input');
+  if (fileInput) fileInput.onchange = function() { visitor.onSelectFiles(this.files); };
+
+  // import file input (if present)
+  const imp = $('import-file');
+  if (imp) imp.onchange = function() {
+    const f = this.files && this.files[0];
+    if (!f) return;
+    readFileAsText(f).then(async txt => {
+      // split lines
+      const rows = txt.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+      // create new entries if not exist
+      const q = new AV.Query(CLASS_SUBMITTER);
+      q.equalTo('roomId', ROOM_ID);
+      const exist = await q.find();
+      const names = exist.map(x => x.get('name'));
+      const toCreate = [];
+      for (const n of rows) {
+        if (!names.includes(n)) {
+          const C = AV.Object.extend(CLASS_SUBMITTER);
+          const o = new C();
+          o.set('roomId', ROOM_ID);
+          o.set('name', n);
+          o.set('submitted', false);
+          o.set('files', []);
+          o.set('submitTime', '');
+          o.set('order', Date.now() + Math.floor(Math.random() * 1000));
+          const acl = new AV.ACL(); acl.setPublicReadAccess(true); acl.setPublicWriteAccess(true); o.setACL(acl);
+          toCreate.push(o);
+        }
+      }
+      if (toCreate.length) await AV.Object.saveAll(toCreate);
+      alert('导入完成：新增 ' + toCreate.length + ' 条');
+      imp.value = '';
+      await refreshDashboard();
+    }).catch(err => { console.error(err); alert('读取导入文件失败'); });
+  };
+
+  // initial refresh of dashboard (if owner logged in)
+  await refreshDashboard();
 });
+
+/* ========== 小工具函数 ========== */
+function readFileAsText(file) {
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onload = () => resolve(fr.result);
+    fr.onerror = reject;
+    fr.readAsText(file);
+  });
+}
+
+/* expose for debugging */
+window.goHome = goHome;
+window.goVisitor = goVisitor;
+window.goOwnerLogin = goOwnerLogin;
+window.owner = owner;
+window.visitor = visitor;
+window.system = system;
+window.refreshDashboard = refreshDashboard;
